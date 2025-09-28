@@ -1,0 +1,32 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build fltk app",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-g", "${file}",
+                "-o", "${fileDirname}\\${fileBasenameNoExtension}.exe",
+                "-I", "C:/dev/libs/fltk-1.4.4",
+                "-I", "C:/dev/libs/fltk-1.4.4/build",
+                "-L", "C:/dev/libs/fltk-1.4.4/build/lib",
+                "-lfltk",
+                "-lole32",      // <-- ADD THIS
+                "-luuid",       // <-- ADD THIS
+                "-lgdiplus",    // <-- ADD THIS
+                "-lwinspool",   // <-- ADD THIS
+                "-luser32",
+                "-lgdi32",
+                "-lcomctl32",
+                "-lws2_32",
+                "-mwindows"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"]
+        }
+    ]
+}
