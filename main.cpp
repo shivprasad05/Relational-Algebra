@@ -3,30 +3,28 @@
 #include <FL/Fl_Input.H>
 #include <FL/Fl_Output.H>
 #include <FL/Fl_Button.H>
+#include <FL/Fl_Box.H>
 #include <string>
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
-#include <cctype> // for isspace and isalnum
-#include <ctime>  // for srand
-#include <cstdlib> // for rand
+#include <cctype>
+#include <ctime>
+#include <cstdlib>
+#include <sstream>
 
-// --- Forward Declarations for the Parser ---
-// The new signature uses an index 'pos' to track progress
-std::string parse_expression(const std::string& expr, size_t& pos);
+using namespace std;
 
+string parse_expression(const string& expr, size_t& pos);
+string parse_term(const string& expr, size_t& pos);
 
-// --- Helper functions for parsing ---
-
-// Moves the index 'pos' past any leading whitespace
-void trim_left(const std::string& s, size_t& pos) {
+void trim_left(const string& s, size_t& pos) {
     while (pos < s.length() && isspace(s[pos])) {
         pos++;
     }
 }
 
-// Consumes a specific character from the current position
-bool consume(const std::string& s, size_t& pos, char c) {
+bool consume(const string& s, size_t& pos, char c) {
     trim_left(s, pos);
     if (pos < s.length() && s[pos] == c) {
         pos++;
@@ -35,135 +33,143 @@ bool consume(const std::string& s, size_t& pos, char c) {
     return false;
 }
 
-// Parses a simple identifier (like a table name or attribute) from the current position
-std::string parse_identifier(const std::string& expr, size_t& pos) {
+string parse_identifier(const string& expr, size_t& pos) {
     trim_left(expr, pos);
     size_t start_pos = pos;
     while (pos < expr.length() && (isalnum(expr[pos]) || expr[pos] == '_')) {
         pos++;
     }
     if (start_pos == pos) {
-        throw std::runtime_error("Expected an identifier (e.g., table name).");
+        throw runtime_error("Expected an identifier (e.g., table name).");
     }
     return expr.substr(start_pos, pos - start_pos);
 }
 
+string wrap_if_subquery(const string& sql) {
+    if (sql.find(' ') == string::npos && sql.find('(') == string::npos) {
+        return sql;
+    }
+    stringstream ss;
+    ss << "(" << sql << ") T_" << rand();
+    return ss.str();
+}
 
-// --- Core Parsing Logic (using index 'pos') ---
-
-// MODIFIED FUNCTION
-std::string parse_projection(const std::string& expr, size_t& pos) {
-    // 1. Find the attributes list (up to the opening parenthesis)
+string parse_projection(const string& expr, size_t& pos) {
     trim_left(expr, pos);
     size_t parenthesis_pos = expr.find('(', pos);
-    if (parenthesis_pos == std::string::npos) {
-        throw std::runtime_error("Syntax error in Project (π): missing '('.");
+    if (parenthesis_pos == string::npos) {
+        throw runtime_error("Syntax error in Project (π): missing '('.");
     }
-
-    std::string attributes = expr.substr(pos, parenthesis_pos - pos);
+    string attributes = expr.substr(pos, parenthesis_pos - pos);
     attributes.erase(attributes.find_last_not_of(" \t\n\r") + 1);
-    
-    pos = parenthesis_pos; // Move position to the parenthesis
-
-    // 2. Parse the inner expression
-    std::string inner_sql = parse_expression(expr, pos);
-
-    // 3. Build the SQL with smarter FROM clause formatting
-    std::string from_clause;
-    // Check if inner_sql is a subquery. A simple check is to see if it contains "SELECT".
-    if (inner_sql.find("SELECT") != std::string::npos) {
-        // It's a subquery, so it needs parentheses and an alias (without AS)
-        from_clause = "(" + inner_sql + ") T_" + std::to_string(rand());
+    pos = parenthesis_pos;
+    string inner_sql = parse_expression(expr, pos);
+    string from_clause;
+    if (inner_sql.find("SELECT") != string::npos || inner_sql.find("UNION") != string::npos) {
+        from_clause = wrap_if_subquery(inner_sql);
     } else {
-        // It's a simple table name, no parentheses or alias needed
         from_clause = inner_sql;
     }
-    
     return "SELECT " + attributes + " FROM " + from_clause;
 }
 
-// MODIFIED FUNCTION
-std::string parse_selection(const std::string& expr, size_t& pos) {
-    // 1. Find the condition (up to the opening parenthesis)
+string parse_selection(const string& expr, size_t& pos) {
     trim_left(expr, pos);
     size_t parenthesis_pos = expr.find('(', pos);
-    if (parenthesis_pos == std::string::npos) {
-        throw std::runtime_error("Syntax error in Select (σ): missing '('.");
+    if (parenthesis_pos == string::npos) {
+        throw runtime_error("Syntax error in Select (σ): missing '('.");
     }
-
-    std::string condition = expr.substr(pos, parenthesis_pos - pos);
+    string condition = expr.substr(pos, parenthesis_pos - pos);
     condition.erase(condition.find_last_not_of(" \t\n\r") + 1);
-
-    pos = parenthesis_pos; // Move position to the parenthesis
-
-    // 2. Parse the inner expression
-    std::string inner_sql = parse_expression(expr, pos);
-
-    // 3. Build the SQL with smarter FROM clause formatting
-    std::string from_clause;
-    // Check if inner_sql is a subquery.
-    if (inner_sql.find("SELECT") != std::string::npos) {
-        // It's a subquery, so it needs parentheses and an alias (without AS)
-        from_clause = "(" + inner_sql + ") T_" + std::to_string(rand());
+    pos = parenthesis_pos;
+    string inner_sql = parse_expression(expr, pos);
+    string from_clause;
+     if (inner_sql.find("SELECT") != string::npos || inner_sql.find("UNION") != string::npos) {
+        from_clause = wrap_if_subquery(inner_sql);
     } else {
-        // It's a simple table name, no parentheses or alias needed
         from_clause = inner_sql;
     }
-
     return "SELECT * FROM " + from_clause + " WHERE " + condition;
 }
 
-
-// This is the main recursive function that drives the parser.
-std::string parse_expression(const std::string& expr, size_t& pos) {
+string parse_term(const string& expr, size_t& pos) {
     trim_left(expr, pos);
     if (pos >= expr.length()) {
-        throw std::runtime_error("Unexpected end of expression.");
+        throw runtime_error("Unexpected end of expression.");
     }
 
-    // Check for unary operators
-    if (expr.substr(pos, 2) == u8"π") {
-        pos += 2; // 2 bytes for UTF-8 'π'
+    if (expr.compare(pos, 2, u8"π") == 0) {
+        pos += 2;
         return parse_projection(expr, pos);
-    } 
-    if (expr.substr(pos, 2) == u8"σ") {
-        pos += 2; // 2 bytes for UTF-8 'σ'
+    }
+    if (expr.compare(pos, 2, u8"σ") == 0) {
+        pos += 2;
         return parse_selection(expr, pos);
     }
 
-    // Check for nested expression in parenthesis
     if (expr[pos] == '(') {
         pos++;
-        std::string result = parse_expression(expr, pos);
+        string result = parse_expression(expr, pos);
         if (!consume(expr, pos, ')')) {
-            throw std::runtime_error("Syntax error: mismatched parentheses.");
+            throw runtime_error("Syntax error: mismatched parentheses.");
         }
         return result;
     }
 
-    // Base case: must be a table name
     return parse_identifier(expr, pos);
 }
 
+string parse_expression(const string& expr, size_t& pos) {
+    string left_sql = parse_term(expr, pos);
 
-// --- Main Entry Point for Translation ---
-std::string parse_and_translate(const std::string& input) {
+    while (true) {
+        trim_left(expr, pos);
+        
+        if (pos < expr.length() && expr.compare(pos, 3, u8"∪") == 0) {
+            pos += 3;
+            string right_sql = parse_term(expr, pos);
+            left_sql = "(" + left_sql + ") UNION (" + right_sql + ")";
+        }
+        else if (pos < expr.length() && expr.compare(pos, 1, "-") == 0) {
+            pos += 1;
+            string right_sql = parse_term(expr, pos);
+            left_sql = "(" + left_sql + ") EXCEPT (" + right_sql + ")";
+        }
+        else if (pos < expr.length() && expr.compare(pos, 3, u8"⨝") == 0) {
+            pos += 3;
+            string right_sql = parse_term(expr, pos);
+            left_sql = "SELECT * FROM " + wrap_if_subquery(left_sql) + " NATURAL JOIN " + wrap_if_subquery(right_sql);
+        }
+        else if (pos < expr.length() && expr.compare(pos, 2, u8"×") == 0) {
+            pos += 2;
+            string right_sql = parse_term(expr, pos);
+            left_sql = "SELECT * FROM " + wrap_if_subquery(left_sql) + " CROSS JOIN " + wrap_if_subquery(right_sql);
+        }
+        else {
+            break;
+        }
+    }
+
+    return left_sql;
+}
+
+string parse_and_translate(const string& input) {
     if (input.empty()) {
         return "Please enter a relational algebra expression.";
     }
     try {
         size_t pos = 0;
-        std::string result = parse_expression(input, pos);
-        trim_left(input, pos); // Check for trailing characters
+        string result = parse_expression(input, pos);
+        trim_left(input, pos);
         if (pos < input.length()) {
              return "Error: Could not parse entire expression. Remainder starts at: " + input.substr(pos);
         }
         return result + ";";
-    } catch (const std::runtime_error& e) {
-        return "Parsing Error: " + std::string(e.what());
+
+    } catch (const runtime_error& e) {
+        return "Parsing Error: " + string(e.what());
     }
 }
-
 
 class RelationalAlgebraGUI {
 public:
@@ -172,34 +178,45 @@ public:
     Fl_Output* sql_output;
 
     RelationalAlgebraGUI() {
-        // Main Window
-        window = new Fl_Window(800, 600, "Relational Algebra to SQL Translator");
+        window = new Fl_Window(800, 500, "Relational Algebra to SQL Translator");
         window->begin();
 
-        // Input Box for Relational Algebra expression
         expression_input = new Fl_Input(150, 25, 625, 40, "RA Expression:");
         expression_input->textfont(FL_COURIER);
         expression_input->textsize(16);
 
-        // Symbol Buttons
         create_symbol_buttons();
 
-        // Translate Button
         Fl_Button* translate_btn = new Fl_Button(350, 150, 100, 30, "Translate");
         translate_btn->callback(translate_cb, this);
 
-        // Output Box for SQL Query
-        sql_output = new Fl_Output(150, 200, 625, 350, "Generated SQL:");
+        sql_output = new Fl_Output(150, 200, 625, 150, "Generated SQL:");
         sql_output->textfont(FL_COURIER);
         sql_output->textsize(16);
         sql_output->align(FL_ALIGN_TOP_LEFT);
+
+        const char* syntax_guide_text =
+    "--- Sample Syntax ---\n"
+    "Select     : σ condition (Relation)\n"
+    "Project    : π attributes (Relation)\n"
+    "Join       : Relation1 ⋈ Relation2\n"
+    "Union      : (Expr1) ∪ (Expr2)\n"
+    "Difference : (Expr1) - (Expr2)\n"
+    "Product    : Relation1 × Relation2";
+
+        
+        Fl_Box* syntax_guide_box = new Fl_Box(150, 360, 625, 100);
+        syntax_guide_box->box(FL_NO_BOX);
+        syntax_guide_box->labelsize(14);
+        syntax_guide_box->labelfont(FL_COURIER);
+        syntax_guide_box->label(syntax_guide_text);
+        syntax_guide_box->align(FL_ALIGN_TOP | FL_ALIGN_LEFT | FL_ALIGN_INSIDE);
 
         window->end();
         window->show();
     }
 
 private:
-    // --- Callbacks ---
     static void insert_symbol_cb(Fl_Widget* w, void* data) {
         RelationalAlgebraGUI* gui = static_cast<RelationalAlgebraGUI*>(data);
         const char* symbol = w->label();
@@ -211,19 +228,20 @@ private:
         RelationalAlgebraGUI* gui = static_cast<RelationalAlgebraGUI*>(data);
         const char* input_text = gui->expression_input->value();
         if (input_text) {
-            std::string result = parse_and_translate(input_text);
+            string result = parse_and_translate(input_text);
             gui->sql_output->value(result.c_str());
         }
     }
 
     void create_symbol_buttons() {
-        const char* symbols[] = { u8"σ", u8"π", u8"⨝", u8"∪", u8"∩", u8"-", u8"×" };
-        const char* tooltips[] = { "Select (sigma)", "Project (pi)", "Join", "Union", "Intersection", "Difference", "Cartesian Product"};
+        const char* symbols[] = { u8"σ", u8"π", u8"⨝", u8"∪", u8"-", u8"×" };
+        const char* tooltips[] = { "Select (sigma)", "Project (pi)", "Join", "Union", "Difference", "Cartesian Product"};
         int x = 150;
         int y = 80;
-        for (int i = 0; i < 7; ++i) {
+        for (int i = 0; i < 6; ++i) {
             Fl_Button* btn = new Fl_Button(x, y, 40, 40, symbols[i]);
             btn->labelsize(20);
+            btn->labelfont(FL_TIMES_BOLD); 
             btn->tooltip(tooltips[i]);
             btn->callback(insert_symbol_cb, this);
             x += 50;
@@ -232,8 +250,7 @@ private:
 };
 
 int main(int argc, char** argv) {
-    srand(time(0)); // Seed for random table aliases
+    srand(time(0));
     RelationalAlgebraGUI gui;
     return Fl::run();
 }
-
